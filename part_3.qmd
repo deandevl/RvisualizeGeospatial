@@ -1,0 +1,298 @@
+---
+format: 
+  html: 
+    number-offset: 2
+---
+
+# Part 3: Making interactive maps with leaflet
+
+This is [part 3](https://www.r-bloggers.com/2021/01/visualizing-geospatial-data-in-r-part-3-making-interactive-maps-with-leaflet/) of the 3 part series.
+
+## Setup
+
+Load the required R packages from CRAN and github.
+
+From CRAN:
+
+```{r}
+#| warning: false
+#| message: false
+
+library(here)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(leaflet)
+library(sf)
+library(devtools)
+library(kableExtra)
+```
+
+From github:
+
+```{r}
+#| warning: false
+#| message: false
+
+devtools::install_github("deandevl/RspatialPkg")
+```
+
+## Introduction
+
+> The benefit of creating a JavaScript map over a .jpg map as we did in our last post is that the map is “slippy,” that is, it slips around inside its container. You can drag to pan, scroll to zoom, click to show popups, etc. The downside, however, is that, since leaflet creates a JavaScript map, the map can only be shared in an interactive environment like a web browser. As such, leaflet is not a good choice for pasting images in papers and presentations, or for setting a snazzy new desktop background. Go back to Maps, Part 2 for that.
+
+## Review: Load data
+
+> The first dataset is a .geojson file containing geospatial descriptions of Philadelphia’s neighborhoods, courtesy of OpenDataPhilly. This dataset is polygon data and will form our basemap for layering on additional, more interesting, features.
+
+> The second dataset is geospatial point data, also provided by OpenDataPhilly, that contains information from the police department on shooting victims.
+
+::: task
+Read in the Philadelphia neighborhood data.
+:::
+
+```{r}
+neighborhoods_file_path <- file.path(here(), "data", "philadelphia-neighborhoods.geojson")
+
+neighborhoods_raw_sf <- sf::read_sf(neighborhoods_file_path)
+sf::st_crs(neighborhoods_raw_sf) = 4326
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Neighborhood simple feature"
+
+head(neighborhoods_raw_sf)
+```
+
+::: task
+Read in the Philadelphia shootings data
+:::
+
+```{r}
+shootings_file_path <- file.path(here(), "data", "philadelphia-shootings-2023.geojson")
+
+shootings_raw_sf <- sf::read_sf(shootings_file_path)
+sf::st_crs(shootings_raw_sf) = 4326
+
+```
+
+```{r}
+head(shootings_raw_sf)
+```
+
+## Review: Clean data
+
+> leaflet requires that data be in WGS 84, so we would need to convert to WGS 84 (EPSG code: 4326) using `sf::st_transform(shootings_raw_sf, crs = 4326)` if it weren’t provided to us with that CRS.
+
+> If we want to run non-geospatial analysis on our shootings data, such as plotting shootings over time, calculating totals by demographic, and so on, we can drop the geospatial information and work with a standard tibble using `sf::st_drop_geometry(shootings_raw_sf)`.
+
+::: task
+In the neighborhood data, rename a column.
+:::
+
+```{r}
+neighborhoods_raw_sf <- data.table::as.data.table(neighborhoods_raw_sf) %>% 
+  data.table::setnames(., old = "MAPNAME", new = "Label") %>% 
+  sf::st_as_sf(.)
+```
+
+## Geospatial layers in leaflet
+
+> You have the option of loading data either as the data = ... argument in `leaflet::leaflet()` or waiting until subsequent layers to provide the data. As in our last post, we will add the data in each layer, since we are working with two distinct datasets.
+
+### Your first map
+
+```{r}
+#| fig-cap: "Basic map of Philadelphia gun violence using leaflet. Source: OpenDataPhilly."
+
+leaflet::leaflet() %>% 
+  leaflet::addPolygons(data = neighborhoods_raw_sf) %>% 
+  leaflet::addCircles(data = shootings_raw_sf)
+```
+
+### Add a basemap
+
+> The leaflet package makes it easy to add map tiles, or “basemaps” to the layperson. You can either choose to call `addTiles()` with no arguments to get the default basemap from OpenStreetMap or choose to call `addProviderTiles()` to get one of the various third-party options. Our favorite is CartoDB.Voyager, but you can explore the entire set of options and pick your favorite.
+
+```{r}
+#| fig-cap: "Leaflet map with provider tiles. Source: OpenDataPhilly."
+
+leaflet::leaflet() %>% 
+  leaflet::addProviderTiles(providers$CartoDB.Voyager) %>% 
+  leaflet::addPolygons(data = neighborhoods_raw_sf) %>% 
+  leaflet::addCircles(data = shootings_raw_sf)
+```
+
+### Simple formatting adjustments
+
+> Let’s make some basic formatting adjustments to the polygons layer: line color, line weight, line opacity, and fill opacity (0 = no fill). We’ll also add a label, which will appear upon hover.
+
+```{r}
+#| fig-cap: "Leaflet map adding a hover label, opacity, dark polygon borders."
+
+make_neighborhood <- function(){
+  neighborhood_wig <- leaflet::leaflet() %>% 
+    leaflet::addProviderTiles(providers$CartoDB.Voyager) %>% 
+    leaflet::addPolygons(
+      color = "#222",
+      weight = 2,
+      opacity = 1,
+      fillOpacity = 0,
+      label = ~lapply(Label, htmltools::htmlEscape),
+      labelOptions = leaflet::labelOptions(direction = "top"),
+      data = neighborhoods_raw_sf
+    )
+  return(neighborhood_wig)
+}
+
+make_neighborhood() %>% 
+  leaflet::addCircles(data = shootings_raw_sf)
+```
+
+### Jitter points so that we can see them more clearly
+
+> You may have seen that some of the points in the plot above were darker than others. This is because we had overlapped multiple translucent circles. To avoid this issue, we will “jitter” our points, adding a small amount of random displacement in the x- and y-directions. To make this jitter consistent each time you render the plot, remember to set the seed value for the random jitter using `set.seed()`.
+
+```{r}
+#| fig-cap: "Leaflet map with jittered points."
+
+set.seed(1776)
+shootings_raw_sf <- sf::st_jitter(shootings_raw_sf, factor = 0.0004)
+
+make_neighborhood() %>% 
+  leaflet::addCircles(data = shootings_raw_sf)
+```
+
+### Add labels for clearer communication
+
+> Our final set of aesthetic changes will be to our point layer. We add two new variables to our shootings dataset: a “Color” variable that encodes encodes the “fatal” variable into red and grey, and a “Popup” variable that summarizes key information about each shooting. This popup variable will appear in our map when we click on a point. In leaflet, labels appear upon hover, and popups appear upon click.
+
+::: task
+Create columns from `shootings_raw_sf` to define popup labels and point colors.
+:::
+
+```{r}
+shootings_labels_sf <- data.table::as.data.table(shootings_raw_sf) %>% 
+  .[, `:=`(
+    Color = ifelse(fatal == 1, "#900", "#222"),
+    Popup = paste0(
+      "<b>", location, "</b>",
+      "<br/><i>", date_, "</i>",
+      "<br/><b>Race:</b> ", data.table::fcase(
+        race == "B", "Black",
+        race == "W", "White"
+      ),
+      "<br/><b>Sex:</b> ", data.table::fcase(
+        sex == "M", "Male",
+        sex == "F", "Female"
+      ),
+      "<br/><b>Age:</b> ", age,
+      "<br/><b>Wound:</b> ", wound,
+      "<br/><b>Fatal?:</b> ", data.table::fcase(
+        fatal == 1, "Yes",
+        fatal == 0, "No"
+      )
+    )
+  )] %>% 
+  .[, .(Color, Popup, geometry)] %>% 
+  sf::st_as_sf(.)
+```
+
+::: task
+Incorporate `shootings_labels_sf` over the neighborhood geometries.
+:::
+
+```{r}
+#| fig-cap: |
+#|   Leaflet with shooting popup and point color
+
+make_neighborhood() %>% 
+  leaflet::addCircles(
+    color = ~Color,
+    popup = ~Popup,
+    data = shootings_labels_sf
+  )
+```
+
+### Choropleths in leaflet
+
+> Choropleths–maps in which each region is colored according to a summary statistic–are a powerful way to visualize data. In this example, let us suppose that we would like to show the total number of shootings in each neighborhood.
+
+::: task
+Join polygon data of `neighborhoods_raw_sf` with `shootings_raw_sf`.
+:::
+
+```{r}
+neighborhoods_valid_raw_sf <- sf::st_make_valid(neighborhoods_raw_sf)
+neigh_shootings_join_sf <- sf::st_join(neighborhoods_valid_raw_sf, shootings_raw_sf)
+```
+
+::: task
+Convert the join to a data.table, group, and create "total_shootings" variable.
+:::
+
+```{r}
+neighborhoods_raw_dt <- data.table::as.data.table(neighborhoods_raw_sf)
+
+neigh_shootings_sf <- data.table::as.data.table(neigh_shootings_join_sf) %>% 
+  .[, .(total_shootings = .N), by = Label] %>% 
+  neighborhoods_raw_dt[., on = c("Label", "Label")] %>% 
+  sf::st_as_sf(.)
+```
+
+::: task
+Map the choropleth based on "total_shootings" variable.
+:::
+
+```{r}
+pal <- leaflet::colorNumeric(
+  "YlOrRd",
+  domain = neigh_shootings_sf$total_shootings
+)
+
+leaflet::leaflet(neigh_shootings_sf) %>% 
+  leaflet::addPolygons(
+    color = "#222",
+    weight = 2,
+    opacity = 1,
+    fillColor = ~pal(total_shootings),
+    fillOpacity = 0.7
+  )
+```
+
+### Final map
+
+> In this final map, we add back our provider tiles, our label, and our highlight options, with no changes here from what had been done earlier in this post. We have also added a legend (and assigned the palette function to it), which describes the color range. Notice that we can change the opacity and location of the legend so that it is as unobtrusive as possible.
+
+```{r}
+#| fig-cap: "Leaflet final map with choropleth on shooting counts and neighborhood highlight"
+
+leaflet::leaflet(neigh_shootings_sf) %>% 
+  leaflet::addPolygons(
+    color = "#222",
+    weight = 2,
+    opacity = 1,
+    fillColor = ~pal(total_shootings),
+    fillOpacity = 0.7,
+    label = ~lapply(Label, htmltools::HTML),
+    labelOptions = leaflet::labelOptions(direction = "top"),
+    highlightOptions = leaflet::highlightOptions(
+      color = "#FFF",
+      bringToFront = T
+    )
+  ) %>% 
+  leaflet::addLegend(
+    pal = pal,
+    values = ~total_shootings,
+    opacity = 0.7,
+    title = "# shootings",
+    position = "topleft"
+  )
+```
+
+## Conclusion
+
+> We would struggle to recreate and exact copy of ggplot2‘s maps in leaflet. But, that is to be expected. These two packages create two different types of maps–static and interactive–for different analytical purposes. What leaflet might lose in creating annotations and allowing for extremely precise aesthetic changes, it gains by allowing for paning, zooming, hovers, and popups.
+
+> Think of these two packages as complimentary tools in your analytics arsenal. Think carefully about when to use each one so that you can display data clearly, insightfully, and intuitively.

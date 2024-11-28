@@ -1,0 +1,13 @@
+---
+title: Tutorial on GIS data visualiztion in R
+format: html
+editor: visual
+---
+
+<h2>Introduction</h2>
+
+The following R script was inspired by a tutorial article [Visualizing geospatial data in R](https://www.r-bloggers.com/2020/11/visualizing-geospatial-data-in-r-part-1-finding-loading-and-cleaning-data/) posted November 24, 2020 by Nathaniel Schmucker in [R bloggers](https://www.r-bloggers.com/).
+
+From the article:
+
+> In the tutorials in this series, we will introduce GIS data visualization in R using the simple features standard, which has become increasingly popular in recent years and which has the smallest learning curve for those who are already comfortable with data frames and the principles of the “tidyverse.” The simple features approach works well for many common map-making applications, including drawing regions (e.g., states) or points (e.g., cities) and coloring them to create an analytical insight (e.g., shading by population density).

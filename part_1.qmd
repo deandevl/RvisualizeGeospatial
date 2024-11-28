@@ -1,0 +1,256 @@
+# Part 1: Finding, loading, and cleaning data
+
+This is [part 1](https://www.r-bloggers.com/2020/11/visualizing-geospatial-data-in-r-part-1-finding-loading-and-cleaning-data/) of the 3 part series.
+
+## Setup
+
+Load the required R packages from CRAN and github.
+
+From CRAN:
+
+```{r}
+#| warning: false
+#| message: false
+
+library(here)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(devtools)
+library(kableExtra)
+```
+
+From github:
+
+```{r}
+#| warning: false
+#| message: false
+
+devtools::install_github("deandevl/RspatialPkg")
+devtools::install_github("deandevl/RcensusPkg")
+```
+
+Define the file path to the shapefiles folder at the root of this Rstudio project for holding downloaded shapefiles:
+
+```{r}
+shapefile_directory <- file.path(here(), "shapefiles")
+```
+
+## Introduction
+
+> If you want to draw state borders (polygons), county borders (more polygons), major highways (lines), and highway rest stops (points), add each of them as an individual layer to the same plot, and color them as you please. There are no constraints when visualizing geospatial data in R.
+
+> This post will focus on how to find, import, and clean geospatial data. The actual graphing will come in Part 2 (static maps with ggplot2) and Part 3 (interactive maps with leaflet).
+
+## A brief introduction to simple features data in R
+
+> Out in the wild, map data most frequntly comes as either geoJSON files (.geojson) or Shapefiles (.shp). These files will, at the very minimum, contain information about the geometry of each object to be drawn, such as instructions to draw a point in a certain location or to draw a polygon with certain dimensions. The raw file may, however, also contain any amount of additional information, such as a name for the object (“Pennsylvania”), or summary statistics (GDP per capita, total population, etc.).
+
+::: task
+Read raw shapefile data from "OpenDataPhilly".
+:::
+
+```{r}
+zip_geojson <- "http://data.phl.opendata.arcgis.com/datasets/b54ec5210cee41c3a884c9086f7af1be_0.geojson"
+phl_zip_raw_sf <- sf::read_sf(zip_geojson)
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: 'Simple feature of "OpenDataPhilly"'
+
+kableExtra::kbl(phl_zip_raw_sf[1:6,])
+```
+
+```{r}
+head(phl_zip_raw_sf)
+```
+
+> We are told the Coordinate Reference System (CRS), which in this case is "WGS 84." CRSs are cartographers' ways of telling each other what system they used for describing points on the earth. Cartographers need to pick an equation for an ellipsoid to approximate earth's shape since it's slightly pear-shaped. Cartographers also need to determine a set of reference markers--known as a datum--to use to set coordinates, as earth's tectonic plates shift ever so slightly over time. Together, the ellipsoid and datum become a CRS.
+
+> WGS 84 is one of the most common CRSs and is the standard used for GPS applications. In the US, you may see data provided using NAD 83. WGS 84 and NAD 83 were originally identical (back in the 1980s), but both have been modified over time as the earth changes and scientific knowledge progresses. WGS 84 seeks to keep the global average of points as similar as possible while NAD 83 tries to keep the North American plate as constant as possible. The net result is that the two different CRSs may vary by about a meter in different places. This is not a big difference for most purposes, but sometimes you may need to adjust.
+
+> If we wanted to transform our data between CRSs, we would call `sf::st_transform(map_raw, crs = 4326)`, where 4362 is the EPSG code of the CRS into which we would like to transform our geometry. EPSGs are a standard, shorthand way to refer to various CRSs. 4326 is the EPSG code for WGS 84 and 4269 is the EPSG code for NAD 83.
+
+## Finding data
+
+> The trouble comes in trying to find the data you need--both the geometry and the proper additional fields--and getting them together into the same object in R.
+
+### Finding geospatial data
+
+::: task
+Import US Census Bureau county data from Pennsylvania.
+:::
+
+```{r}
+penn_fips <- usmap::fips(state = "pennsylvania")
+express <- expression(STATEFP == penn_fips)
+penn_cty_sf <- RcensusPkg::tiger_counties_sf(
+  output_dir = shapefile_directory,
+  vintage = 2018,
+  general = TRUE,
+  resol = "20m",
+  express = express,
+  sf_info = FALSE
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(GEOID, NAME, COUNTYFP, COUNTYNS, geometry)] %>% 
+  .[, NAME := toupper(NAME)] %>% 
+  data.table::setnames(., old = "NAME", new = "COUNTY") %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Simple feature of Pennsylvania"
+
+kableExtra::kbl(penn_cty_sf[1:6,])
+```
+
+```{r}
+#| fig-cap: "Basic map of PA counties, Source: U.S. Census Bureau TIGER/Line Shapefiles."
+
+RspatialPkg::get_geom_sf(
+  sf = penn_cty_sf,
+  hide_x_tics = T,
+  hide_y_tics = T,
+  panel_color = "white",
+  panel_border_color = "white"
+)
+```
+
+::: task
+For non-US applications, use the package `rnaturalearth` which provides easy access to global data.
+:::
+
+```{r}
+asia_sf <- rnaturalearth::ne_countries(
+  continent = "Asia",
+  returnclass = "sf"
+)
+```
+
+```{r}
+#| fig-cap: "Basic map of countries in Asia. Source: rnaturalearth package."
+
+RspatialPkg::get_geom_sf(
+  sf = asia_sf,
+  hide_x_tics = T,
+  hide_y_tics = T,
+  panel_color = "white",
+  panel_border_color = "white"
+)
+```
+
+### Finding non-geospatial data
+
+> Chances are that you are coming to a geospatial mapping project with a particular dataset in mind.
+
+> ...Hopefully, your data has an ID that you can use to identify each geospatial region.
+
+::: task
+Join PA's Department of Health hospital data with PA's county geometries.
+:::
+
+1.  Read the source data:
+
+```{r}
+pa_hospitals_csv_path <- file.path(here(), "data", "DOH_Hospitals201912.csv")
+pa_hospitals_raw_dt <- data.table::fread(file = pa_hospitals_csv_path) %>%
+  .[, .(FACILITY_N,COUNTY)] %>% 
+  .[, COUNTY := trimws(COUNTY)]
+```
+
+2.  Group `pa_hospitals_raw_dt` by "COUNTY" and create a column with the number of facilities:
+
+```{r}
+pa_hospitals_grouped_dt <- pa_hospitals_raw_dt[, .(N_Facility = .N), by = COUNTY] %>% 
+  .[order(COUNTY),]
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Total Pennsylvania hospitals by county"
+
+kableExtra::kbl(pa_hospitals_grouped_dt[1:6,])
+```
+
+3.  Get the PA county populations from the US Census Bureau:
+
+```{r}
+pa_cty_pop_dt <- RcensusPkg::get_vintage_data(
+  dataset = "dec/pl",
+  vintage = 2020,
+  vars = "P1_001N",
+  region = "county:*",
+  regionin = paste0("state:", penn_fips)  
+) %>% 
+  .[, .(GEOID, NAME, P1_001N)] %>% 
+  .[, c("COUNTY", "State_str") := tstrsplit(NAME, "County,")] %>% 
+  .[, COUNTY := trimws(toupper(COUNTY))] %>% 
+  data.table::setnames(., old = "P1_001N", new = "Cty_Pop") %>% 
+  .[, .(COUNTY, Cty_Pop)] %>% 
+  .[order(COUNTY),]
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Pennsylvania populations by county"
+
+kableExtra::kbl(pa_cty_pop_dt[1:6,])
+```
+
+4.  Join the values of `pa_hospitals_grouped_dt` with `pa_cty_pop_dt` using their common variable "COUNTY":
+
+```{r}
+data.table::setkeyv(pa_hospitals_grouped_dt, "COUNTY")
+data.table::setkeyv(pa_cty_pop_dt, "COUNTY")
+
+pa_hospitals_pop_dt <- pa_cty_pop_dt[pa_hospitals_grouped_dt] %>% 
+  .[, `:=`(Cty_Pop = as.numeric(Cty_Pop))]
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Pennsylvania populations joined with hospital totals by county"
+
+kableExtra::kbl(pa_hospitals_pop_dt [1:6,])
+```
+
+5.  Add a column to the joined data.table `pa_hospitals_pop_dt` that divides "N_Facility" by "Cty_Pop":
+
+```{r}
+pa_hospitals_pop_dt[, Hosp_Per_1M := N_Facility / (Cty_Pop/1000000)]
+```
+
+6.  Join the county geometries with the hospital data:
+
+```{r}
+pa_hospitals_pop_dt <- RcensusPkg::join_it(
+  df_1 = pa_hospitals_pop_dt,
+  df_2 = penn_cty_sf,
+  key_1 = "COUNTY",
+  key_2 = "COUNTY"
+)
+```
+
+7.  Map the geometries and hospital data:
+
+```{r}
+#| fig-cap: "Hospitals per million residents. Montour County is apparently the place to be if you need a hospital!"
+
+RspatialPkg::get_geom_sf(
+  sf = sf::st_as_sf(pa_hospitals_pop_dt),
+  aes_fill = "Hosp_Per_1M",
+  own_scale = T,
+  hide_x_tics = T,
+  hide_y_tics = T,
+  panel_color = "white",
+  panel_border_color = "white",
+  legend_key_width = 0.7,
+  legend_key_height = 0.7
+) +
+  ggplot2::scale_fill_viridis_c()
+```

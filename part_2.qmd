@@ -1,0 +1,382 @@
+---
+format: 
+  html: 
+    number-offset: 1
+---
+
+# Part 2: Making maps with ggplot2
+
+This is [part 2](https://www.r-bloggers.com/2020/12/visualizing-geospatial-data-in-r-part-2-making-maps-with-ggplot2/) of the 3 part series.
+
+## Setup
+
+Load the required R packages from CRAN and github.
+
+From CRAN:
+
+```{r}
+#| warning: false
+#| message: false
+
+library(here)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(devtools)
+library(kableExtra)
+```
+
+From github:
+
+```{r}
+#| warning: false
+#| message: false
+
+devtools::install_github("deandevl/RspatialPkg")
+```
+
+Define the file path to the shapefiles folder at the root of this Rstudio project for holding downloaded shapefiles:
+
+```{r}
+shapefile_directory <- file.path(here(), "shapefiles")
+```
+
+## Review: Load and clean data
+
+> The first dataset is a .geojson file containing geospatial descriptions of Philadelphia’s neighborhoods, courtesy of [OpenDataPhilly](https://opendataphilly.org/datasets/philadelphia-neighborhoods/). This dataset is polygon data and will form our basemap for layering on additional, more interesting, features.
+
+> The second dataset, also courtesy of [OpenDataPhilly](https://opendataphilly.org/datasets/philadelphia-tree-inventory/) is our dataset of interest: a 2024 inventory of all of the trees in Philadelphia. This dataset is point data, where each tree has associated coordinates for identifying its precise location.
+
+### Load the data
+
+::: task
+Read in the Philadelphia neighborhood data.
+:::
+
+```{r}
+neighborhoods_file_path <- file.path(here(), "data", "philadelphia-neighborhoods.geojson")
+
+neighborhoods_raw_sf <- sf::read_sf(neighborhoods_file_path)
+sf::st_crs(neighborhoods_raw_sf) = 4326
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Philadelphia Neighborhoods"
+
+kableExtra::kbl(neighborhoods_raw_sf[1:6,])
+```
+
+::: task
+Read in the Philadelphia tree data.
+:::
+
+```{r}
+trees_file_path <- file.path(here(), "data", "ppr_tree_inventory_2024.csv")
+
+trees_raw_sf <- sf::read_sf(trees_file_path) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, `:=`(loc_x = as.numeric(loc_x), loc_y = as.numeric(loc_y))] %>% 
+  sf::st_as_sf(., coords = c("loc_x","loc_y"))  
+sf::st_crs(trees_raw_sf) = 4326  
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Philadelphia Trees"
+
+kableExtra::kbl(trees_raw_sf[1:6,])
+```
+
+### Clean the data
+
+::: task
+In the neighborhood data, rename columns; add "Area" column which converts square footage to acres.
+:::
+
+```{r}
+neighborhoods_raw_sf <- data.table::as.data.table(neighborhoods_raw_sf) %>%
+  data.table::setnames(., old = "MAPNAME", new ="Label") %>% 
+  .[, Area := Shape_Area/43560] %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Neighborhood simple feature"
+
+head(neighborhoods_raw_sf)
+```
+
+::: task
+In the tree data, rename a column.
+:::
+
+```{r}
+trees_raw_sf <- data.table::as.data.table(trees_raw_sf) %>% 
+  data.table::setnames(., old = "objectid", new = "Tree_ID") %>% 
+  .[, Tree_ID := as.numeric(Tree_ID)] %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Trees simple feature"
+
+head(trees_raw_sf)
+```
+
+## Geospatial layers in ggplot2
+
+### Your first map
+
+::: task
+Map the two simple features by layering trees sf over the neighborhoods sf.
+:::
+
+```{r}
+#| message: false
+#| fig-cap: "Neighborhoods around Philadelphia, PA with trees"
+
+RspatialPkg::get_geom_sf(
+  sf = neighborhoods_raw_sf
+) %>% 
+  RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_raw_sf,
+  sf_color = "#74b560"
+)
+```
+
+## Zoom in on a region of interest
+
+## Zoom in on a region of interest
+
+> By default, ggplot2 will zoom out so that all of the mapping objects are in the image. Suppose, however, that we are interested in a smaller region of the map: Center City Philadelphia.
+
+> We can use `ggplot2::coord_sf()` to specify the coordinates to display. By default, `geom_sf()` calls `coord_sf()` in the background, but by explicitly calling it ourselves, we can override the default parameters. Below, we will specify our latitude and longitude, and set `expand = FALSE`. By default, expand is true, which puts a small buffer around the coordinates we specify. It’s an aesthetic choice.
+
+> If you recall from Part 1 of this series, the CRS is the ellipsoid and datum used to reference points on the globe. ggplot2 will take the first CRS provided (in this case, in our neighborhoods dataset) and ensure that all subsequent layers use the same CRS. It automatically converts any mismatched CRSs to the first one provided. Using `coord_sf()`, we have options to change the CRS and the datum. Changing the datum won’t affect plotting, but will affect where graticules (latitude/longitude lines) are drawn if you choose to include them. By default, ggplot2 draws graticules using WGS 84 (EPSG: 4326), which happens to be the CRS of our two datasets. If we had needed to, we could have changed to NAD 83 (EPSG: 4269) using datum = sf::st_crs(4269).
+
+```{r}
+#| warning: false
+#| message: false
+#| fig-cap: "Zoomed neighborhoods around Philadelphia, PA with trees"
+
+RspatialPkg::get_geom_sf(
+  sf = neighborhoods_raw_sf,
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_raw_sf,
+  sf_color = "#74b560",
+  sf_fill = "#74b560",
+  sf_size = 1.6,
+  xlim = c(-75.185, -75.13),
+  ylim = c(39.93, 39.96)
+)
+```
+
+## Add labels for clearer communication
+
+> Now that we have zoomed in to a smaller region, we have space on our map to add labels.
+
+::: task
+Use the "Label" column from our `neighborhoods_raw_sf` simple feature to label the zoomed suburbs.
+:::
+
+```{r}
+#| warning: false
+#| message: false
+#| fig-cap: "Neighborhoods around Philadelphia, PA with labels and trees."
+
+RspatialPkg::get_geom_sf(
+  sf = neighborhoods_raw_sf
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_raw_sf,
+  sf_color = "#74b560",
+  sf_fill = "#74b560",
+  sf_size = 1.6
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = neighborhoods_raw_sf,
+  aes_text = "Label",
+  text_fontface = "bold",
+  text_check_overlap = T,
+  sf_alpha = 0,
+  xlim = c(-75.185, -75.13),
+  ylim = c(39.93, 39.96)
+)
+```
+
+## Add highlights and annotations
+
+> I want to highlight and annotate my favorite tree. Since the highlight rule needs to be determined tree-by-tree, we need to adjust our simple features object and add an appropriate aesthetic call to our plot. First we adjust our simple features object by adding columns for the color group and the label text. Then, we adjust our plot by including aes(color = Color) to define color groups and simultaneously adding `scale_color_manual()` to specify the colors we want for each group. At the same time, we optionally set `show.legend = FALSE` to hide the legend. We also add the label text using `geom_sf_label()` using the aes(label = Label) to specify the text and other parameters to adjust how it appears on the plot.
+
+::: task
+Add "Color" and "Label" columns to `trees_raw_sf` simple feature and map to highlight a favorite tree.
+:::
+
+Add the two new columns where "Color" is a numeric factor taking on values 1 or 0 and "Label" with "My favorite" or blank character string depending on "Tree_ID:
+
+```{r}
+trees_highlight_sf <- data.table::as.data.table(trees_raw_sf) %>% 
+  .[, `:=`(
+    #Color = ifelse(Tree_ID == 39547, "#cb7123", "#74b560"),
+    Color = ifelse(Tree_ID == 39547, 1, 0),
+    Label = ifelse(Tree_ID == 39547, "My favorite", "")
+  )] %>% 
+  .[, Color := as.factor(Color)] %>% 
+  sf::st_as_sf(.)
+```
+
+Map with the new color and labels:
+
+```{r}
+#| warning: false
+#| message: false
+#| fig-cap: "My favorite tree in Northwood, Philadelphia, PA."
+
+RspatialPkg::get_geom_sf(
+  sf = neighborhoods_raw_sf,
+  aes_text = "Label",
+  text_fontface = "bold",
+  text_size = 4.5, 
+  show_legend = F,
+  sf_alpha = 0
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_highlight_sf,
+  aes_fill = "Color",
+  own_scale = T,
+  sf_size = 2.5
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_highlight_sf,
+  aes_text = "Label",
+  text_color = "#cb7123",
+  text_fontface = "bold",
+  text_size = 3.5,
+  text_nudge_y = -0.0002,
+  xlim = c(-75.12, -75.09),
+  ylim = c(40.02, 40.035)
+) +
+   ggplot2::scale_fill_manual(values = c("#74b560", "#cb7123"))
+```
+
+## Final beautification
+
+::: task
+Add titles, source note, background color.
+:::
+
+```{r}
+#| warning: false
+#| message: false
+#| fig-cap: "My favorite tree in Northwood, Philadelphia, PA."
+
+RspatialPkg::get_geom_sf(
+  sf = neighborhoods_raw_sf,
+  aes_text = "Label",
+  text_fontface = "bold",
+  text_size = 4.5, 
+  show_legend = F,
+  sf_alpha = 0,
+  panel_color = grey(0.75),
+  panel_border_color = "white",
+  title = "The Urban Forest of Northwood, Philadelphia, PA.",
+  subtitle = "2024 virtual assessment of Philadelphia's Street trees",
+  caption = "Source: OpenDataPhilly",
+  x_title = "Longitude",
+  y_title = "Latitude"
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_highlight_sf,
+  aes_fill = "Color",
+  own_scale = T,
+  sf_size = 2.5
+) %>% 
+RspatialPkg::get_geom_sf(
+  gg = .,
+  sf = trees_highlight_sf,
+  aes_text = "Label",
+  text_color = "#cb7123",
+  text_fontface = "bold",
+  text_size = 3.5,
+  text_nudge_y = -0.0002,
+  xlim = c(-75.12, -75.09),
+  ylim = c(40.02, 40.035)
+) +
+ggplot2::scale_fill_manual(values = c("#74b560", "#cb7123")) +
+ggplot2::theme(
+  panel.grid.major = ggplot2::element_line(
+    color = gray(0.5), linetype = "dashed", size = 0.5
+  )
+)
+```
+
+## Choropleths in ggplot2
+
+> ...the concept of a “choropleth” map, which colors regions to represent a statistical variable. For instance, we may want to color our neighborhoods by the number of trees in each, or (more appropriately) the number of trees per acre.
+
+### Merge and clean data
+
+::: task
+Join `neighborhoods_raw_sf` and `trees_raw_sf` via \`sf::st_join().
+:::
+
+```{r}
+neighborhoods_valid_raw_sf <- sf::st_make_valid(neighborhoods_raw_sf)
+
+neigh_tree_join_sf <- sf::st_join(neighborhoods_valid_raw_sf, trees_raw_sf)
+```
+
+::: task
+Convert the join to a data.table, group, and create "Density" variable.
+:::
+
+```{r}
+neighborhoods_raw_dt <- data.table::as.data.table(neighborhoods_raw_sf)
+
+count_density_sf <- data.table::as.data.table(neigh_tree_join_sf) %>% 
+  .[, .N, by = .(NAME, Area)] %>% 
+  .[, Density := N/Area] %>% 
+  neighborhoods_raw_dt[., on = c("NAME", "NAME")] %>% 
+  sf::st_as_sf(.)
+```
+
+::: task
+Use the "Density" (trees per acre) variable to produce a choropleth map across the neighborhoods of Philadelphia, PA
+:::
+
+```{r}
+RspatialPkg::get_geom_sf(
+  sf = count_density_sf,
+  aes_fill = "Density",
+  own_scale = T,
+  title = "The Urban Forest of Philadelphia",
+  subtitle = "Number of trees per acre",
+  x_title = "Longitude",
+  y_title = "Latitude",
+  caption = "Source: OpenDataPhilly",
+  panel_color = grey(0.75),
+  panel_border_color = "white"
+) +
+  ggplot2::labs(
+    fill = "Trees per acre"
+  ) +
+  ggplot2::scale_fill_viridis_c(alpha = 0.75) +
+  ggplot2::theme(
+    panel.grid.major = ggplot2::element_line(
+      color = gray(0.5), linetype = "dashed", size = 0.5
+    )
+  )
+```
